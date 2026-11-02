@@ -41,7 +41,7 @@ jobs:
       - run: gradle assembleDebug --no-daemon
 
       - name: Publish release
-        if: env.REAL_CONFIG == '1'
+        if: env.REAL_CONFIG == '1' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

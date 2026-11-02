@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -99,41 +101,69 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun App(onSetup: () -> Unit) {
     val ctx = LocalContext.current
-    var configured by remember { mutableStateOf(Repo.configured) }
-    if (configured) Home()
-    else Setup { configured = true; PresenceService.start(ctx); onSetup() }
+    val rooms by Repo.rooms.collectAsState()
+    var named by remember { mutableStateOf(Repo.name.isNotBlank()) }
+    if (named && rooms.isNotEmpty()) Home()
+    else Setup { named = true; PresenceService.start(ctx); Repo.start(); onSetup() }
 }
 
 @Composable
 fun Setup(onDone: () -> Unit) {
-    var name by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf(Repo.name) }
     var room by remember { mutableStateOf("") }
+    var linking by remember { mutableStateOf(false) }
+    var link by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
     Column(
         Modifier.fillMaxSize().systemBarsPadding().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
     ) {
         Text("GG", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Text("Make a code on one phone and type the same code on the other.")
-        OutlinedTextField(name, { name = it }, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(room, { room = it }, label = { Text("Shared code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        TextButton(onClick = {
-            room = (1..10).map { "abcdefghjkmnpqrstuvwxyz23456789".random() }.joinToString("")
-        }) { Text("Make a new code") }
-        Button(
-            onClick = { Repo.saveSetup(name, room); onDone() },
-            enabled = name.isNotBlank() && room.trim().length >= 6,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Start") }
+        if (!linking) {
+            Text("Make a code on one phone and type the same code on the other.")
+            OutlinedTextField(name, { name = it }, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(room, { room = it }, label = { Text("Shared code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            TextButton(onClick = { room = newCode() }) { Text("Make a new code") }
+            Button(
+                onClick = { Repo.saveName(name); Repo.join(room); onDone() },
+                enabled = name.isNotBlank() && room.trim().length >= 6,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Start") }
+            TextButton(onClick = { linking = true }) { Text("Already use GG on another device? Link it") }
+        } else {
+            Text("On your other device open Set my status → Use on another device, and type the link code shown there.")
+            OutlinedTextField(link, { link = it; error = "" }, label = { Text("Link code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+            Button(
+                onClick = {
+                    busy = true
+                    Repo.link(link) { ok ->
+                        busy = false
+                        if (ok) onDone() else error = "No GG found with that code (or no internet)"
+                    }
+                },
+                enabled = !busy && link.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (busy) "Linking…" else "Link") }
+            TextButton(onClick = { linking = false }) { Text("Back") }
+        }
     }
 }
+
+fun newCode() = (1..10).map { "abcdefghjkmnpqrstuvwxyz23456789".random() }.joinToString("")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Home() {
     val ctx = LocalContext.current
-    val users by Repo.users.collectAsState()
-    val nicks by Repo.nicks.collectAsState()
-    val pfps by Repo.pfps.collectAsState()
+    val rooms by Repo.rooms.collectAsState()
+    val cur by Repo.current.collectAsState()
+    val all by Repo.data.collectAsState()
+    val room = all[cur] ?: Room()
+    val users = room.users
+    val nicks = room.nicks
+    val pfps = room.pfps
     var now by remember { mutableLongStateOf(Repo.now()) }
     LaunchedEffect(Unit) { while (true) { now = Repo.now(); delay(1000) } }
     var editNick by remember { mutableStateOf<Person?>(null) }
@@ -160,6 +190,18 @@ fun Home() {
             Spacer(Modifier.width(8.dp))
             Switch(checked = me.visible, onCheckedChange = { Repo.setVisible(it) })
         }
+        if (rooms.size > 1) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                rooms.forEach { r ->
+                    val p = all[r]?.users?.values?.firstOrNull { it.uid != Repo.uid }
+                    FilterChip(
+                        selected = r == cur,
+                        onClick = { Repo.select(r) },
+                        label = { Text(p?.let { Repo.display(r, it) } ?: "Waiting · $r") },
+                    )
+                }
+            }
+        }
         BatteryHint()
 
         Column(
@@ -170,7 +212,7 @@ fun Home() {
             if (partner == null) {
                 Text("Waiting for your partner", fontSize = 22.sp)
                 Spacer(Modifier.height(8.dp))
-                Text("Code: ${Repo.room}", color = Color.Gray)
+                Text("Code: $cur", color = Color.Gray)
             } else {
                 PartnerStatus(partner, nicks, pfps[partner.uid], now) { profileFor = partner }
             }
@@ -179,7 +221,7 @@ fun Home() {
         if (partner != null) {
             Button(onClick = {
                 Repo.talk()
-                Toast.makeText(ctx, "Sent! ${Repo.display(partner)} will get a notification", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, "Sent! ${Repo.display(cur, partner)} will get a notification", Toast.LENGTH_SHORT).show()
             }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Text("💬 I want to talk")
             }
@@ -193,12 +235,12 @@ fun Home() {
 
     if (showSheet) {
         ModalBottomSheet(onDismissRequest = { showSheet = false }) {
-            MySheet(me, nicks, pfps[me.uid]) { profileFor = me }
+            MySheet(cur, me, nicks, pfps[me.uid], room.options, onLeft = { showSheet = false }) { profileFor = me }
         }
     }
     profileFor?.let { p ->
         ProfileDialog(
-            title = if (p.uid == Repo.uid) "Me" else Repo.display(p),
+            title = if (p.uid == Repo.uid) "Me" else Repo.display(cur, p),
             hasPhoto = !pfps[p.uid].isNullOrBlank(),
             onDismiss = { profileFor = null },
             onPhoto = {
@@ -279,11 +321,16 @@ fun PartnerStatus(p: Person, nicks: Map<String, String>, photo: String?, now: Lo
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun MySheet(me: Person, nicks: Map<String, String>, myPhoto: String?, onProfile: () -> Unit) {
+fun MySheet(
+    cur: String, me: Person, nicks: Map<String, String>, myPhoto: String?, options: Map<String, List<Opt>>,
+    onLeft: () -> Unit, onProfile: () -> Unit,
+) {
     var customFor by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
-    var msg by remember { mutableStateOf(me.msg) }
-    val options by Repo.options.collectAsState()
+    var msg by remember(cur) { mutableStateOf(me.msg) }
+    var adding by remember { mutableStateOf(false) }
+    var leaving by remember { mutableStateOf(false) }
+    var showLink by remember { mutableStateOf(false) }
     val theme by Repo.theme.collectAsState()
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
@@ -334,6 +381,56 @@ fun MySheet(me: Person, nicks: Map<String, String>, myPhoto: String?, onProfile:
                 Text("My photo & nickname: ${nicks[me.uid]?.takeIf { it.isNotBlank() } ?: me.name}")
             }
         }
+
+        Text("Connections", fontWeight = FontWeight.Bold)
+        TextButton(onClick = { adding = true }) { Text("➕ Add connection") }
+        TextButton(onClick = { showLink = true }) { Text("📱 Use on another device") }
+        TextButton(onClick = { leaving = true }) { Text("🚪 Leave this connection", color = MaterialTheme.colorScheme.error) }
+    }
+    if (adding) {
+        var code by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { adding = false },
+            title = { Text("Add connection") },
+            text = {
+                Column {
+                    Text("Type the other person's code, or make a new one and share it.")
+                    OutlinedTextField(code, { code = it }, label = { Text("Shared code") }, singleLine = true)
+                    TextButton(onClick = { code = newCode() }) { Text("Make a new code") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { Repo.join(code); adding = false }, enabled = code.trim().length >= 6) { Text("Join") }
+            },
+            dismissButton = { TextButton(onClick = { adding = false }) { Text("Cancel") } },
+        )
+    }
+    if (leaving) {
+        AlertDialog(
+            onDismissRequest = { leaving = false },
+            title = { Text("Leave this connection?") },
+            text = { Text("Your status, photo, nickname and message are removed from code $cur on all your devices.") },
+            confirmButton = {
+                TextButton(onClick = { leaving = false; onLeft(); Repo.leave(cur) }) {
+                    Text("Leave", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { leaving = false }) { Text("Cancel") } },
+        )
+    }
+    if (showLink) {
+        AlertDialog(
+            onDismissRequest = { showLink = false },
+            title = { Text("Use GG on another device") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("On the other device tap \"Already use GG on another device? Link it\" and type:")
+                    SelectionContainer { Text(Repo.uid, fontSize = 26.sp, fontWeight = FontWeight.Bold) }
+                    Text("Anyone with this code can act as you, so only type it on your own devices.", color = Color.Gray, fontSize = 13.sp)
+                }
+            },
+            confirmButton = { TextButton(onClick = { showLink = false }) { Text("Done") } },
+        )
     }
     customFor?.let { sec ->
         NickDialog("", title = "New status", onDismiss = { customFor = null }) {
