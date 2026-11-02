@@ -260,7 +260,8 @@ object Repo {
         armDisconnect(room)
         val on = visibleIn(room) && localOnline
         // Clear the old single-device fields; presence now lives under dev/.
-        me(room).updateChildren(mapOf("name" to name, "visible" to visibleIn(room), "online" to null, "since" to null, "lastSeen" to null))
+        // "visible" is only written by the switch, so a freshly linked device can't un-hide you.
+        me(room).updateChildren(mapOf("name" to name, "online" to null, "since" to null, "lastSeen" to null))
         val d = mutableMapOf<String, Any>("on" to on)
         if (on && pushed.add(room)) d["since"] = ServerValue.TIMESTAMP
         dev(room).updateChildren(d)
