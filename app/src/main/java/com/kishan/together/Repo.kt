@@ -21,6 +21,16 @@ data class Person(
     val mood: String = "",
     val body: String = "",
     val talk: Long = 0,
+    val msg: String = "",
+)
+
+data class Opt(val key: String, val text: String)
+
+/** Starting options for each status section; after the first run both phones share and edit them in Firebase. */
+val DEFAULT_OPTIONS = linkedMapOf(
+    "tag" to listOf("📚 Studying", "📱 Shorting", "📸 Reeling", "🎮 Gaming", "💼 Working", "🍽 Eating", "😴 Sleeping", "💬 Chatting"),
+    "mood" to listOf("😊 Happy", "😡 Mad", "😢 Sad", "😞 Depressed", "😤 Hate you"),
+    "body" to listOf("🩸 Period", "😣 PMSing"),
 )
 
 object Repo {
@@ -30,6 +40,7 @@ object Repo {
     val users = MutableStateFlow<Map<String, Person>>(emptyMap())
     val nicks = MutableStateFlow<Map<String, String>>(emptyMap())
     val pfps = MutableStateFlow<Map<String, String>>(emptyMap())
+    val options = MutableStateFlow<Map<String, List<Opt>>>(emptyMap())
     val theme by lazy { MutableStateFlow(prefs.getString("theme", "Lavender")!!) }
     var onEvent: ((String, String) -> Unit)? = null
 
@@ -78,6 +89,18 @@ object Repo {
         root.child("pfp").addValueEventListener(listener { s ->
             pfps.value = s.children.associate { it.key!! to (it.getValue(String::class.java) ?: "") }
         })
+        root.child("options").addValueEventListener(listener { s ->
+            if (!s.hasChild("seeded")) {
+                // Fixed keys, so both phones seeding at once write the same thing.
+                val seed = mutableMapOf<String, Any>("seeded" to true)
+                DEFAULT_OPTIONS.forEach { (sec, list) -> list.forEachIndexed { i, o -> seed["$sec/$i"] = o } }
+                s.ref.updateChildren(seed)
+                return@listener
+            }
+            options.value = DEFAULT_OPTIONS.keys.associateWith { sec ->
+                s.child(sec).children.mapNotNull { c -> c.getValue(String::class.java)?.let { Opt(c.key!!, it) } }
+            }
+        })
         root.child("users").addValueEventListener(listener { s ->
             val map = s.children.associate { it.key!! to parse(it) }
             users.value = map
@@ -103,6 +126,7 @@ object Repo {
         mood = s.child("mood").getValue(String::class.java) ?: "",
         body = s.child("body").getValue(String::class.java) ?: "",
         talk = s.child("talk").getValue(Long::class.java) ?: 0,
+        msg = s.child("msg").getValue(String::class.java) ?: "",
     )
 
     private fun listener(block: (DataSnapshot) -> Unit) = object : ValueEventListener {
@@ -162,6 +186,17 @@ object Repo {
     fun setTheme(name: String) {
         prefs.edit().putString("theme", name).apply()
         theme.value = name
+    }
+
+    /** Adds a shared status option (both phones see it). Skips blanks and duplicates. */
+    fun addOption(section: String, text: String) {
+        val t = text.trim()
+        if (t.isBlank() || options.value[section].orEmpty().any { it.text == t }) return
+        db.getReference("rooms/$room/options/$section").push().setValue(t)
+    }
+
+    fun removeOption(section: String, key: String) {
+        db.getReference("rooms/$room/options/$section/$key").removeValue()
     }
 
     fun talk() {

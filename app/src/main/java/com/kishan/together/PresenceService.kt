@@ -46,7 +46,7 @@ class PresenceService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(this, "running")
             .setSmallIcon(android.R.drawable.presence_online)
-            .setContentTitle("Together is sharing your status")
+            .setContentTitle("GG is sharing your status")
             .setContentIntent(open)
             .setOngoing(true)
             .build()

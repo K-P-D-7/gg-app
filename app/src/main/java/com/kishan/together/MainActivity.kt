@@ -37,10 +37,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
-private val TAGS = listOf("📚 Studying", "📱 Shorting", "📸 Reeling", "🎮 Gaming", "💼 Working", "🍽 Eating", "😴 Sleeping", "💬 Chatting")
-private val MOODS = listOf("😊 Happy", "😡 Mad", "😢 Sad", "😞 Depressed", "😤 Hate you")
-private val BODY = listOf("🩸 Period", "😣 PMSing")
-
 // Phone makers that block background apps unless "Autostart" is on.
 private val AUTOSTART = listOf(
     ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"),
@@ -88,7 +84,7 @@ class MainActivity : ComponentActivity() {
         for (c in AUTOSTART) {
             val opened = runCatching { startActivity(Intent().setComponent(c).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
             if (opened) {
-                Toast.makeText(this, "Turn ON Together here, then come back", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Turn ON GG here, then come back", Toast.LENGTH_LONG).show()
                 return
             }
         }
@@ -116,7 +112,7 @@ fun Setup(onDone: () -> Unit) {
         Modifier.fillMaxSize().systemBarsPadding().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
     ) {
-        Text("Together", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+        Text("GG", fontSize = 32.sp, fontWeight = FontWeight.Bold)
         Text("Make a code on one phone and type the same code on the other.")
         OutlinedTextField(name, { name = it }, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(room, { room = it }, label = { Text("Shared code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -159,7 +155,7 @@ fun Home() {
 
     Column(Modifier.fillMaxSize().systemBarsPadding().padding(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Together", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.weight(1f))
+            Text("GG", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.weight(1f))
             Text(if (me.visible) "Sharing" else "Hidden", color = Color.Gray, fontSize = 13.sp)
             Spacer(Modifier.width(8.dp))
             Switch(checked = me.visible, onCheckedChange = { Repo.setVisible(it) })
@@ -248,6 +244,15 @@ fun PartnerStatus(p: Person, nicks: Map<String, String>, photo: String?, now: Lo
         p.online -> Color(0xFF2ECC71)
         else -> Color(0xFF666666)
     }
+    if (p.msg.isNotBlank()) {
+        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.primaryContainer) {
+            Text(
+                p.msg, Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                fontSize = 18.sp, color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+    }
     val extras = if (p.visible) listOf(p.mood, p.tag, p.body).filter { it.isNotBlank() } else emptyList()
     if (extras.isNotEmpty()) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
@@ -275,7 +280,10 @@ fun PartnerStatus(p: Person, nicks: Map<String, String>, photo: String?, now: Lo
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MySheet(me: Person, nicks: Map<String, String>, myPhoto: String?, onProfile: () -> Unit) {
-    var customOpen by remember { mutableStateOf(false) }
+    var customFor by remember { mutableStateOf<String?>(null) }
+    var editing by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf(me.msg) }
+    val options by Repo.options.collectAsState()
     val theme by Repo.theme.collectAsState()
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
@@ -283,11 +291,30 @@ fun MySheet(me: Person, nicks: Map<String, String>, myPhoto: String?, onProfile:
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("All optional. Tap again to remove.", color = Color.Gray, modifier = Modifier.weight(1f))
+            TextButton(onClick = { editing = !editing }) { Text(if (editing) "Done" else "Edit") }
             TextButton(onClick = { listOf("tag", "mood", "body").forEach { Repo.setField(it, "") } }) { Text("Clear all") }
         }
-        Section("Doing", TAGS, me.tag, onCustom = { customOpen = true }) { Repo.setField("tag", it) }
-        Section("Mood", MOODS, me.mood) { Repo.setField("mood", it) }
-        Section("Cycle", BODY, me.body) { Repo.setField("body", it) }
+
+        Text("Display a message", fontWeight = FontWeight.Bold)
+        OutlinedTextField(
+            msg, { if (it.length <= 200) msg = it },
+            placeholder = { Text("Shows on their screen") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row {
+            Button(onClick = { Repo.setField("msg", msg.trim()) }, enabled = msg.trim() != me.msg) { Text("Show") }
+            Spacer(Modifier.width(8.dp))
+            if (me.msg.isNotBlank()) TextButton(onClick = { msg = ""; Repo.setField("msg", "") }) { Text("Remove") }
+        }
+
+        listOf("tag" to "Doing", "mood" to "Mood", "body" to "Cycle").forEach { (sec, title) ->
+            val current = when (sec) { "tag" -> me.tag; "mood" -> me.mood; else -> me.body }
+            Section(
+                title, options[sec].orEmpty(), current, editing,
+                onDelete = { Repo.removeOption(sec, it.key) },
+                onCustom = { customFor = sec },
+            ) { Repo.setField(sec, it) }
+        }
 
         Text("Theme", fontWeight = FontWeight.Bold)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -308,8 +335,12 @@ fun MySheet(me: Person, nicks: Map<String, String>, myPhoto: String?, onProfile:
             }
         }
     }
-    if (customOpen) {
-        NickDialog("", title = "What are you doing?", onDismiss = { customOpen = false }) { Repo.setField("tag", it); customOpen = false }
+    customFor?.let { sec ->
+        NickDialog("", title = "New status", onDismiss = { customFor = null }) {
+            val t = it.trim()
+            if (t.isNotBlank()) { Repo.addOption(sec, t); Repo.setField(sec, t) }
+            customFor = null
+        }
     }
 }
 
@@ -331,18 +362,25 @@ fun ProfileDialog(title: String, hasPhoto: Boolean, onDismiss: () -> Unit, onPho
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun Section(title: String, options: List<String>, current: String, onCustom: (() -> Unit)? = null, onPick: (String) -> Unit) {
+fun Section(
+    title: String, options: List<Opt>, current: String, editing: Boolean,
+    onDelete: (Opt) -> Unit, onCustom: () -> Unit, onPick: (String) -> Unit,
+) {
+    val x: (@Composable () -> Unit)? = if (editing) { { Text("✕") } } else null
     Text(title, fontWeight = FontWeight.Bold)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { o ->
-            FilterChip(selected = current == o, onClick = { onPick(if (current == o) "" else o) }, label = { Text(o) })
+            FilterChip(
+                selected = !editing && current == o.text,
+                onClick = { if (editing) onDelete(o) else onPick(if (current == o.text) "" else o.text) },
+                label = { Text(o.text) },
+                trailingIcon = x,
+            )
         }
-        if (current.isNotBlank() && current !in options) {
+        if (!editing && current.isNotBlank() && options.none { it.text == current }) {
             FilterChip(selected = true, onClick = { onPick("") }, label = { Text(current) })
         }
-        if (onCustom != null) {
-            FilterChip(selected = false, onClick = onCustom, label = { Text("+ Custom") })
-        }
+        if (!editing) FilterChip(selected = false, onClick = onCustom, label = { Text("+ Custom") })
     }
 }
 
@@ -366,7 +404,7 @@ fun BatteryHint() {
     if (ignoring) return
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
-            Text("Allow Together to run in the background so your status stays accurate.")
+            Text("Allow GG to run in the background so your status stays accurate.")
             TextButton(onClick = {
                 ctx.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}")))
                 ignoring = true
