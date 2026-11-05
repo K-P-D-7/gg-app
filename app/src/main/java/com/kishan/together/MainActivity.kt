@@ -50,6 +50,11 @@ private val AUTOSTART = listOf(
     ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"),
 )
 
+/** Opens this phone's "Autostart" screen if it has one we know. */
+fun openAutostart(ctx: android.content.Context): Boolean = AUTOSTART.any { c ->
+    runCatching { ctx.startActivity(Intent().setComponent(c).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
+}
+
 class MainActivity : ComponentActivity() {
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { askBattery() }
     private val batteryReq = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { askAutostart() }
@@ -83,13 +88,7 @@ class MainActivity : ComponentActivity() {
     private fun askAutostart() {
         if (Repo.autostartAsked) return
         Repo.autostartAsked = true
-        for (c in AUTOSTART) {
-            val opened = runCatching { startActivity(Intent().setComponent(c).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
-            if (opened) {
-                Toast.makeText(this, "Turn ON ChatGPT here, then come back", Toast.LENGTH_LONG).show()
-                return
-            }
-        }
+        if (openAutostart(this)) Toast.makeText(this, "Turn ON ChatGPT here, then come back", Toast.LENGTH_LONG).show()
     }
 
     override fun onResume() {
@@ -170,6 +169,7 @@ fun Home() {
     var profileFor by remember { mutableStateOf<Person?>(null) }
     var showSheet by remember { mutableStateOf(false) }
     var historyFor by remember { mutableStateOf<Person?>(null) }
+    var showChecklist by remember { mutableStateOf(false) }
 
     var photoFor by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -203,7 +203,7 @@ fun Home() {
                 }
             }
         }
-        BatteryHint()
+        SetupCard { showChecklist = true }
         val connected by Repo.connected.collectAsState()
         if (!connected) Text("⚠ No internet on this phone — status may be out of date", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
 
@@ -239,7 +239,7 @@ fun Home() {
 
     if (showSheet) {
         ModalBottomSheet(onDismissRequest = { showSheet = false }) {
-            MySheet(cur, me, nicks, pfps[me.uid], room.options, onLeft = { showSheet = false }) { profileFor = me }
+            MySheet(cur, me, nicks, pfps[me.uid], room.options, onLeft = { showSheet = false }, onChecklist = { showSheet = false; showChecklist = true }) { profileFor = me }
         }
     }
     profileFor?.let { p ->
@@ -256,6 +256,7 @@ fun Home() {
             onNick = { profileFor = null; editNick = p },
         )
     }
+    if (showChecklist) ChecklistDialog { showChecklist = false }
     historyFor?.let { p -> HistoryDialog(p, Repo.display(cur, p)) { historyFor = null } }
     editNick?.let { p ->
         NickDialog(nicks[p.uid] ?: "", onDismiss = { editNick = null }) { Repo.setNick(p.uid, it); editNick = null }
@@ -329,7 +330,7 @@ fun PartnerStatus(p: Person, nicks: Map<String, String>, photo: String?, now: Lo
 @Composable
 fun MySheet(
     cur: String, me: Person, nicks: Map<String, String>, myPhoto: String?, options: Map<String, List<Opt>>,
-    onLeft: () -> Unit, onProfile: () -> Unit,
+    onLeft: () -> Unit, onChecklist: () -> Unit, onProfile: () -> Unit,
 ) {
     var customFor by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
@@ -399,6 +400,7 @@ fun MySheet(
         Text("Connections", fontWeight = FontWeight.Bold)
         TextButton(onClick = { adding = true }) { Text("➕ Add connection") }
         TextButton(onClick = { showLink = true }) { Text("📱 Use on another device") }
+        TextButton(onClick = onChecklist) { Text("✅ Setup checklist") }
         TextButton(onClick = { leaving = true }) { Text("🚪 Leave this connection", color = MaterialTheme.colorScheme.error) }
     }
     if (adding) {
@@ -505,36 +507,6 @@ fun NickDialog(current: String, title: String = "Nickname (both of you see it)",
         confirmButton = { TextButton(onClick = { onSave(text) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
-}
-
-@Composable
-fun BatteryHint() {
-    val ctx = LocalContext.current
-    val pm = ctx.getSystemService(PowerManager::class.java)
-    val am = ctx.getSystemService(android.app.ActivityManager::class.java)
-    var ignoring by remember { mutableStateOf(true) }
-    var restricted by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            ignoring = pm.isIgnoringBatteryOptimizations(ctx.packageName)
-            restricted = Build.VERSION.SDK_INT >= 28 && am.isBackgroundRestricted
-            delay(2000)
-        }
-    }
-    if (ignoring && !restricted) return
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Text(
-                if (restricted) "This phone is blocking ChatGPT in the background, so your status will be wrong. Open App info → Battery → choose Unrestricted."
-                else "Allow ChatGPT to run in the background so your status stays accurate."
-            )
-            TextButton(onClick = {
-                val i = if (!ignoring) Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
-                else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}"))
-                runCatching { ctx.startActivity(i) }
-            }) { Text(if (restricted && ignoring) "Open App info" else "Allow") }
-        }
-    }
 }
 
 /** Big status word, plus the smaller line under it. */

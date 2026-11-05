@@ -122,6 +122,10 @@ object Repo {
 
     fun now() = System.currentTimeMillis() + offset
 
+    /** Setup-checklist steps the person ticked themselves (ones Android can't check). */
+    fun done(key: String) = prefs.getBoolean("done_$key", false)
+    fun setDone(key: String, v: Boolean) = prefs.edit().putBoolean("done_$key", v).apply()
+
     fun saveName(n: String) = prefs.edit().putString("name", n.trim()).apply()
 
     fun display(room: String, p: Person) = data.value[room]?.nicks?.get(p.uid)?.takeIf { it.isNotBlank() } ?: p.name
