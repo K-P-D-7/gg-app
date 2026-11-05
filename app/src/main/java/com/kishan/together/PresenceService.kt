@@ -12,13 +12,25 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
 class PresenceService : Service() {
     private var eventId = 100
+    private val handler = Handler(Looper.getMainLooper())
+
+    /** Every minute: re-check whether the phone is in use (in case a screen event was missed) and send a "still here" ping. */
+    private val tick = object : Runnable {
+        override fun run() {
+            val inUse = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive && !locked()
+            if (inUse != Repo.active) Repo.setActive(inUse) else Repo.beat()
+            handler.postDelayed(this, 60_000)
+        }
+    }
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
@@ -64,6 +76,13 @@ class PresenceService : Service() {
         Repo.start()
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         Repo.setActive(pm.isInteractive && !locked())
+        handler.postDelayed(tick, 60_000)
+    }
+
+    /** Some phones kill the service when the app is swiped away; ask for a restart right away. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        KeepAlive.kick(this)
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun alert(kind: String, text: String) {
@@ -82,6 +101,7 @@ class PresenceService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
 
     override fun onDestroy() {
+        handler.removeCallbacks(tick)
         unregisterReceiver(receiver)
         Repo.onEvent = null
         super.onDestroy()

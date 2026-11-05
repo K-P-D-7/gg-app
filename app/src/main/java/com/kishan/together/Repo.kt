@@ -24,7 +24,31 @@ data class Person(
     val body: String = "",
     val talk: Long = 0,
     val msg: String = "",
+    val hist: Boolean = false,
+    val devs: List<Dev> = emptyList(),
 )
+
+/** One of a person's devices. [beat] is refreshed every minute while the device is in use. */
+data class Dev(val on: Boolean, val since: Long, val last: Long, val beat: Long)
+
+/** A device counts as online only if it said so AND checked in recently; a killed app can't leave someone stuck "online". */
+const val STALE_MS = 3 * 60_000L
+
+private fun Dev.live(now: Long) = on && (beat == 0L || now - beat < STALE_MS)
+
+/** (online, online since, last online) worked out from all of a person's devices at time [now]. */
+fun Person.state(now: Long): Triple<Boolean, Long, Long> {
+    if (devs.isEmpty()) return Triple(online, since, lastSeen)
+    val live = devs.filter { it.live(now) }
+    if (live.isNotEmpty()) return Triple(true, live.map { it.since }.filter { it > 0 }.minOrNull() ?: 0, 0)
+    // A device that still says "on" but stopped checking in was last seen at its last check-in.
+    val ends = devs.map { if (it.on) maxOf(it.beat, it.since) else it.last }
+    val i = ends.indices.maxBy { ends[it] }
+    return Triple(false, devs[i].since, ends[i])
+}
+
+/** One stretch of time a person was online. [end] is 0 while it's still going. */
+data class Session(val start: Long, val end: Long)
 
 data class Opt(val key: String, val text: String)
 
@@ -56,6 +80,8 @@ object Repo {
     val rooms = MutableStateFlow<List<String>>(emptyList())
     val current = MutableStateFlow("")
     val data = MutableStateFlow<Map<String, Room>>(emptyMap())
+    /** False while this phone has no connection to the server, so what's shown may be out of date. */
+    val connected = MutableStateFlow(true)
     val theme by lazy { MutableStateFlow(prefs.getString("theme", "Lavender")!!) }
     var onEvent: ((String, String) -> Unit)? = null
 
@@ -67,6 +93,8 @@ object Repo {
     private val loaded = mutableSetOf<String>()
     private val pushed = mutableSetOf<String>()
     private val prevPartner = mutableMapOf<String, Person?>()
+    private val sessions = mutableMapOf<String, DatabaseReference>()
+    val active get() = localOnline
 
     fun init(ctx: Context) {
         prefs = ctx.getSharedPreferences("together", Context.MODE_PRIVATE)
@@ -108,6 +136,8 @@ object Repo {
     /** Hidden state is cached locally so a phone never reports "online" in a room you're hidden in, even before data loads. */
     private fun hidden() = prefs.getStringSet("hidden", emptySet())!!
     private fun visibleIn(room: String) = room !in hidden()
+    private fun histRooms() = prefs.getStringSet("hist", emptySet())!!
+    private fun histIn(room: String) = room in histRooms()
 
     fun start() {
         if (uid.isBlank() || name.isBlank() || startedFor == uid) return
@@ -121,7 +151,9 @@ object Repo {
 
         watch(db.getReference(".info/serverTimeOffset"), global) { offset = it.getValue(Long::class.java) ?: 0 }
         watch(db.getReference(".info/connected"), global) {
-            if (it.getValue(Boolean::class.java) == true) rooms.value.forEach(::pushPresence)
+            val c = it.getValue(Boolean::class.java) == true
+            connected.value = c
+            if (c) rooms.value.forEach(::pushPresence)
         }
         watch(person().child("rooms"), global) { s -> setRooms(s.children.map { it.key!! }) }
         rooms.value.forEach(::attach)
@@ -187,7 +219,10 @@ object Repo {
             // A user with no name is a leftover from a device that already left; skip it.
             val map = s.children.filter { it.hasChild("name") }.associate { it.key!! to parse(it) }
             edit { r -> r.copy(users = map) }
-            map[uid]?.let { syncHidden(room, !it.visible) }
+            map[uid]?.let {
+                syncHidden(room, !it.visible)
+                syncSet("hist", room, it.hist)
+            }
             val p = map.values.firstOrNull { it.uid != uid }
             if (room in loaded && p != null) {
                 val old = prevPartner[room]
@@ -203,15 +238,18 @@ object Repo {
     private fun detach(room: String) {
         attached.remove(room)?.forEach { (r, l) -> r.removeEventListener(l) }
         dev(room).onDisconnect().cancel()
+        endSession(room)
         data.update { it - room }
         loaded -= room
         pushed -= room
         prevPartner -= room
     }
 
-    private fun syncHidden(room: String, h: Boolean) {
-        val set = hidden()
-        if (h != (room in set)) prefs.edit().putStringSet("hidden", if (h) set + room else set - room).apply()
+    private fun syncHidden(room: String, h: Boolean) = syncSet("hidden", room, h)
+
+    private fun syncSet(key: String, room: String, inSet: Boolean) {
+        val set = prefs.getStringSet(key, emptySet())!!
+        if (inSet != (room in set)) prefs.edit().putStringSet(key, if (inSet) set + room else set - room).apply()
     }
 
     private fun parse(s: DataSnapshot): Person {
@@ -226,6 +264,7 @@ object Repo {
             body = s.child("body").getValue(String::class.java) ?: "",
             talk = s.child("talk").getValue(Long::class.java) ?: 0,
             msg = s.child("msg").getValue(String::class.java) ?: "",
+            hist = s.child("hist").getValue(Boolean::class.java) ?: false,
         )
         if (devs.isEmpty()) {
             // Not upgraded yet: old single-device fields.
@@ -235,17 +274,14 @@ object Repo {
                 lastSeen = s.child("lastSeen").getValue(Long::class.java).n(),
             )
         }
-        fun DataSnapshot.on() = child("on").getValue(Boolean::class.java) == true
-        fun DataSnapshot.since() = child("since").getValue(Long::class.java).n()
-        fun DataSnapshot.last() = child("last").getValue(Long::class.java).n()
-        val onDevs = devs.filter { it.on() }
-        // Online if any device is in use, counted from the earliest; otherwise the device that went off last.
-        return if (onDevs.isNotEmpty()) {
-            base.copy(online = true, since = onDevs.map { it.since() }.filter { it > 0 }.minOrNull() ?: 0)
-        } else {
-            val latest = devs.maxBy { it.last() }
-            base.copy(online = false, since = latest.since(), lastSeen = latest.last())
-        }
+        return base.copy(devs = devs.map {
+            Dev(
+                on = it.child("on").getValue(Boolean::class.java) == true,
+                since = it.child("since").getValue(Long::class.java).n(),
+                last = it.child("last").getValue(Long::class.java).n(),
+                beat = it.child("beat").getValue(Long::class.java).n(),
+            )
+        })
     }
 
     /** If the connection drops while online, the server marks this device offline at once. */
@@ -263,8 +299,10 @@ object Repo {
         // "visible" is only written by the switch, so a freshly linked device can't un-hide you.
         me(room).updateChildren(mapOf("name" to name, "online" to null, "since" to null, "lastSeen" to null))
         val d = mutableMapOf<String, Any>("on" to on)
+        if (on) d["beat"] = ServerValue.TIMESTAMP
         if (on && pushed.add(room)) d["since"] = ServerValue.TIMESTAMP
         dev(room).updateChildren(d)
+        if (on) startSession(room) else endSession(room)
     }
 
     /** Called when the phone starts or stops being in use (unlocked and screen on). */
@@ -274,10 +312,78 @@ object Repo {
         for (room in rooms.value) {
             if (!visibleIn(room)) continue
             val m = mutableMapOf<String, Any>("on" to on)
+            if (on) m["beat"] = ServerValue.TIMESTAMP
             if (on && !was) { m["since"] = ServerValue.TIMESTAMP; pushed += room }
             if (!on && was) m["last"] = ServerValue.TIMESTAMP
             armDisconnect(room)
             dev(room).updateChildren(m)
+            if (on) startSession(room) else endSession(room)
+        }
+    }
+
+    /** "Still here" ping, sent every minute while the phone is in use. */
+    fun beat() {
+        if (!localOnline) return
+        for (room in rooms.value) {
+            if (!visibleIn(room)) continue
+            dev(room).updateChildren(mapOf<String, Any>("on" to true, "beat" to ServerValue.TIMESTAMP))
+            sessions[room]?.child("b")?.setValue(ServerValue.TIMESTAMP)
+        }
+    }
+
+    // ---- Activity history: rooms/<code>/history/<uid>/<id> = {s: start, b: last check-in, e: end}. Only kept if that person turns it on.
+
+    private fun history(room: String, who: String = uid) = db.getReference("rooms/$room/history/$who")
+
+    private fun startSession(room: String) {
+        if (!histIn(room) || !visibleIn(room)) return
+        val ref = sessions[room] ?: history(room).push().also {
+            sessions[room] = it
+            it.updateChildren(mapOf<String, Any>("s" to ServerValue.TIMESTAMP))
+        }
+        ref.child("e").removeValue()
+        ref.child("b").setValue(ServerValue.TIMESTAMP)
+        ref.child("e").onDisconnect().setValue(ServerValue.TIMESTAMP)
+    }
+
+    private fun endSession(room: String) {
+        val ref = sessions.remove(room) ?: return
+        ref.child("e").onDisconnect().cancel()
+        ref.child("e").setValue(ServerValue.TIMESTAMP)
+    }
+
+    /** Turns saving of my activity history on or off for the current connection. Turning it off deletes what was saved. */
+    fun setHistory(on: Boolean) {
+        val room = cur
+        syncSet("hist", room, on)
+        if (on) {
+            me(room).child("hist").setValue(true)
+            if (localOnline) startSession(room)
+        } else {
+            me(room).child("hist").removeValue()
+            sessions.remove(room)?.child("e")?.onDisconnect()?.cancel()
+            history(room).removeValue()
+        }
+    }
+
+    /** Loads the last 30 days of [who]'s history in the current connection, newest first, and drops older entries. */
+    fun loadHistory(who: String, done: (List<Session>) -> Unit) {
+        val room = cur
+        val cutoff = now() - 30L * 86_400_000L
+        history(room, who).get().addOnCompleteListener { t ->
+            if (!t.isSuccessful) return@addOnCompleteListener done(emptyList())
+            val list = t.result.children.mapNotNull { c ->
+                val start = c.child("s").getValue(Long::class.java) ?: return@mapNotNull null
+                if (start < cutoff) {
+                    if (who == uid) c.ref.removeValue()
+                    return@mapNotNull null
+                }
+                val e = c.child("e").getValue(Long::class.java)
+                val b = c.child("b").getValue(Long::class.java) ?: start
+                val live = e == null && now() - b < STALE_MS
+                Session(start, if (live) 0 else e ?: b)
+            }
+            done(list.sortedByDescending { it.start })
         }
     }
 
@@ -286,9 +392,10 @@ object Repo {
         syncHidden(room, !v)
         me(room).child("visible").setValue(v)
         val m = mutableMapOf<String, Any>("on" to (v && localOnline))
-        if (v && localOnline) m["since"] = ServerValue.TIMESTAMP
+        if (v && localOnline) { m["since"] = ServerValue.TIMESTAMP; m["beat"] = ServerValue.TIMESTAMP }
         armDisconnect(room)
         dev(room).updateChildren(m)
+        if (v && localOnline) startSession(room) else endSession(room)
     }
 
     /** Joins (or creates) a shared code on this and all of this person's devices. */
@@ -305,7 +412,7 @@ object Repo {
         val others = data.value[room]?.users?.keys.orEmpty() - uid
         val ref = db.getReference("rooms/$room")
         if (others.isEmpty()) ref.removeValue()
-        else ref.updateChildren(mapOf("users/$uid" to null, "nicks/$uid" to null, "pfp/$uid" to null))
+        else ref.updateChildren(mapOf("users/$uid" to null, "nicks/$uid" to null, "pfp/$uid" to null, "history/$uid" to null))
         person().child("rooms/$room").removeValue()
         setRooms(rooms.value - room)
     }
@@ -318,7 +425,7 @@ object Repo {
             val n = if (t.isSuccessful) t.result.child("name").getValue(String::class.java) else null
             if (n.isNullOrBlank()) return@addOnCompleteListener done(false)
             prefs.edit().putString("uid", id).putString("name", n).putBoolean("migrated", true)
-                .putStringSet("rooms", emptySet()).putStringSet("hidden", emptySet()).apply()
+                .putStringSet("rooms", emptySet()).putStringSet("hidden", emptySet()).putStringSet("hist", emptySet()).apply()
             done(true)
         }
     }

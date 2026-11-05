@@ -169,6 +169,7 @@ fun Home() {
     var editNick by remember { mutableStateOf<Person?>(null) }
     var profileFor by remember { mutableStateOf<Person?>(null) }
     var showSheet by remember { mutableStateOf(false) }
+    var historyFor by remember { mutableStateOf<Person?>(null) }
 
     var photoFor by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -203,6 +204,8 @@ fun Home() {
             }
         }
         BatteryHint()
+        val connected by Repo.connected.collectAsState()
+        if (!connected) Text("⚠ No internet on this phone — status may be out of date", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
 
         Column(
             Modifier.weight(1f).fillMaxWidth(),
@@ -215,6 +218,7 @@ fun Home() {
                 Text("Code: $cur", color = Color.Gray)
             } else {
                 PartnerStatus(partner, nicks, pfps[partner.uid], now) { profileFor = partner }
+                if (partner.hist) TextButton(onClick = { historyFor = partner }) { Text("🕒 Activity history") }
             }
         }
 
@@ -252,6 +256,7 @@ fun Home() {
             onNick = { profileFor = null; editNick = p },
         )
     }
+    historyFor?.let { p -> HistoryDialog(p, Repo.display(cur, p)) { historyFor = null } }
     editNick?.let { p ->
         NickDialog(nicks[p.uid] ?: "", onDismiss = { editNick = null }) { Repo.setNick(p.uid, it); editNick = null }
     }
@@ -281,9 +286,10 @@ fun Avatar(photo: String?, ring: Color, size: Dp, onClick: () -> Unit) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PartnerStatus(p: Person, nicks: Map<String, String>, photo: String?, now: Long, onProfile: () -> Unit) {
+    val online = p.state(now).first
     val dot = when {
         !p.visible -> Color(0xFFFF9800)
-        p.online -> Color(0xFF2ECC71)
+        online -> Color(0xFF2ECC71)
         else -> Color(0xFF666666)
     }
     if (p.msg.isNotBlank()) {
@@ -340,6 +346,14 @@ fun MySheet(
             Text("All optional. Tap again to remove.", color = Color.Gray, modifier = Modifier.weight(1f))
             TextButton(onClick = { editing = !editing }) { Text(if (editing) "Done" else "Edit") }
             TextButton(onClick = { listOf("tag", "mood", "body").forEach { Repo.setField(it, "") } }) { Text("Clear all") }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Save my activity history", fontWeight = FontWeight.Bold)
+                Text("Lets them see when you were online (last 30 days). Turning it off deletes it.", color = Color.Gray, fontSize = 13.sp)
+            }
+            Switch(checked = me.hist, onCheckedChange = { Repo.setHistory(it) })
         }
 
         Text("Display a message", fontWeight = FontWeight.Bold)
@@ -497,25 +511,74 @@ fun NickDialog(current: String, title: String = "Nickname (both of you see it)",
 fun BatteryHint() {
     val ctx = LocalContext.current
     val pm = ctx.getSystemService(PowerManager::class.java)
-    var ignoring by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(ctx.packageName)) }
-    if (ignoring) return
+    val am = ctx.getSystemService(android.app.ActivityManager::class.java)
+    var ignoring by remember { mutableStateOf(true) }
+    var restricted by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            ignoring = pm.isIgnoringBatteryOptimizations(ctx.packageName)
+            restricted = Build.VERSION.SDK_INT >= 28 && am.isBackgroundRestricted
+            delay(2000)
+        }
+    }
+    if (ignoring && !restricted) return
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
-            Text("Allow ChatGPT to run in the background so your status stays accurate.")
+            Text(
+                if (restricted) "This phone is blocking ChatGPT in the background, so your status will be wrong. Open App info → Battery → choose Unrestricted."
+                else "Allow ChatGPT to run in the background so your status stays accurate."
+            )
             TextButton(onClick = {
-                ctx.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}")))
-                ignoring = true
-            }) { Text("Allow") }
+                val i = if (!ignoring) Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
+                else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}"))
+                runCatching { ctx.startActivity(i) }
+            }) { Text(if (restricted && ignoring) "Open App info" else "Allow") }
         }
     }
 }
 
 /** Big status word, plus the smaller line under it. */
-fun status(p: Person, now: Long): Pair<String, String> = when {
-    !p.visible -> "Hidden" to "Turned off their online status"
-    p.online -> "Online" to "for ${dur(now - p.since)}"
-    p.lastSeen == 0L -> "Offline" to ""
-    else -> "Offline" to "Last online ${ago(now - p.lastSeen)} · was on for ${dur(p.lastSeen - p.since)}"
+fun status(p: Person, now: Long): Pair<String, String> {
+    val (online, since, lastSeen) = p.state(now)
+    return when {
+        !p.visible -> "Hidden" to "Turned off their online status"
+        online -> "Online" to "for ${dur(now - since)}"
+        lastSeen == 0L -> "Offline" to ""
+        else -> "Offline" to "Last online ${ago(now - lastSeen)} · was on for ${dur(lastSeen - since)}"
+    }
+}
+
+/** Last 30 days of someone's online sessions, grouped by day. */
+@Composable
+fun HistoryDialog(p: Person, title: String, onDismiss: () -> Unit) {
+    var list by remember(p.uid) { mutableStateOf<List<Session>?>(null) }
+    LaunchedEffect(p.uid) { Repo.loadHistory(p.uid) { list = it } }
+    val now = Repo.now()
+    val day = remember { java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault()) }
+    val time = remember { java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("$title · last 30 days") },
+        text = {
+            val l = list
+            when {
+                l == null -> Text("Loading…")
+                l.isEmpty() -> Text("Nothing saved yet.")
+                else -> Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                    l.groupBy { day.format(java.util.Date(it.start)) }.forEach { (d, items) ->
+                        val total = items.sumOf { (if (it.end == 0L) now else it.end) - it.start }
+                        Text("$d · ${dur(total)} total", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+                        items.forEach { sesh ->
+                            val end = if (sesh.end == 0L) "now" else time.format(java.util.Date(sesh.end))
+                            val len = dur((if (sesh.end == 0L) now else sesh.end) - sesh.start)
+                            Text("${time.format(java.util.Date(sesh.start))} – $end   ($len)", fontSize = 14.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 private fun dur(ms: Long): String {

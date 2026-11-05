@@ -12,8 +12,8 @@ android {
         applicationId = "com.kishan.together"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
     }
 
     compileOptions {
@@ -33,4 +33,5 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
     implementation("com.google.firebase:firebase-database")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }

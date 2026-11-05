@@ -6,5 +6,6 @@ class TogetherApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Repo.init(this)
+        KeepAlive.schedule(this)
     }
 }
