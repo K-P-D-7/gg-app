@@ -327,7 +327,13 @@ object Repo {
         for (room in rooms.value) {
             if (!visibleIn(room)) continue
             dev(room).updateChildren(mapOf<String, Any>("on" to true, "beat" to ServerValue.TIMESTAMP))
-            sessions[room]?.child("b")?.setValue(ServerValue.TIMESTAMP)
+            // Follow history being switched on/off from another of my devices.
+            val s = sessions[room]
+            when {
+                !histIn(room) -> s?.let { sessions.remove(room); it.child("e").onDisconnect().cancel() }
+                s == null -> startSession(room)
+                else -> s.child("b").setValue(ServerValue.TIMESTAMP)
+            }
         }
     }
 
