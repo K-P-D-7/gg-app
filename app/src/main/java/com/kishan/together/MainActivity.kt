@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity() {
     private fun askAutostart() {
         if (Repo.autostartAsked) return
         Repo.autostartAsked = true
-        if (openAutostart(this)) Toast.makeText(this, "Turn ON ChatGPT here, then come back", Toast.LENGTH_LONG).show()
+        if (openAutostart(this)) Toast.makeText(this, "Turn ON claude here, then come back", Toast.LENGTH_LONG).show()
     }
 
     override fun onResume() {
@@ -118,7 +118,7 @@ fun Setup(onDone: () -> Unit) {
         Modifier.fillMaxSize().systemBarsPadding().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
     ) {
-        Text("ChatGPT", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+        Text("claude", fontSize = 32.sp, fontWeight = FontWeight.Bold)
         if (!linking) {
             Text("Make a code on one phone and type the same code on the other.")
             OutlinedTextField(name, { name = it }, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -129,7 +129,7 @@ fun Setup(onDone: () -> Unit) {
                 enabled = name.isNotBlank() && room.trim().length >= 6,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Start") }
-            TextButton(onClick = { linking = true }) { Text("Already use ChatGPT on another device? Link it") }
+            TextButton(onClick = { linking = true }) { Text("Already use claude on another device? Link it") }
         } else {
             Text("On your other device open Set my status → Use on another device, and type the link code shown there.")
             OutlinedTextField(link, { link = it; error = "" }, label = { Text("Link code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -139,7 +139,7 @@ fun Setup(onDone: () -> Unit) {
                     busy = true
                     Repo.link(link) { ok ->
                         busy = false
-                        if (ok) onDone() else error = "No ChatGPT account found with that code (or no internet)"
+                        if (ok) onDone() else error = "No claude account found with that code (or no internet)"
                     }
                 },
                 enabled = !busy && link.isNotBlank(),
@@ -186,7 +186,7 @@ fun Home() {
 
     Column(Modifier.fillMaxSize().systemBarsPadding().padding(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("ChatGPT", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.weight(1f))
+            Text("claude", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.weight(1f))
             Text(if (me.visible) "Sharing" else "Hidden", color = Color.Gray, fontSize = 13.sp)
             Spacer(Modifier.width(8.dp))
             Switch(checked = me.visible, onCheckedChange = { Repo.setVisible(it) })
@@ -437,10 +437,10 @@ fun MySheet(
     if (showLink) {
         AlertDialog(
             onDismissRequest = { showLink = false },
-            title = { Text("Use ChatGPT on another device") },
+            title = { Text("Use claude on another device") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("On the other device tap \"Already use ChatGPT on another device? Link it\" and type:")
+                    Text("On the other device tap \"Already use claude on another device? Link it\" and type:")
                     SelectionContainer { Text(Repo.uid, fontSize = 26.sp, fontWeight = FontWeight.Bold) }
                     Text("Anyone with this code can act as you, so only type it on your own devices.", color = Color.Gray, fontSize = 13.sp)
                 }

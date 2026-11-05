@@ -45,6 +45,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk ChatGPT.apk
+          cp app/build/outputs/apk/debug/app-debug.apk claude.apk
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest ChatGPT.apk --title "GG" --notes "Download ChatGPT.apk and install it."
+          gh release create latest claude.apk --title "GG" --notes "Download claude.apk and install it."

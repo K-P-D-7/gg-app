@@ -74,7 +74,7 @@ fun steps(): List<Step> = buildList {
     if (isColorOs) {
         add(Step(
             "autostart", "Allow auto-launch",
-            "Turn ChatGPT ON in the list. If App info opens instead, look for \"Allow auto-launch\" (or Settings → Apps → Auto launch).",
+            "Turn claude ON in the list. If App info opens instead, look for \"Allow auto-launch\" (or Settings → Apps → Auto launch).",
             "Open",
             open = { ctx -> if (!openAutostart(ctx)) appInfo(ctx) },
         ))
@@ -86,7 +86,7 @@ fun steps(): List<Step> = buildList {
         ))
         add(Step(
             "lock", "Lock in recent apps",
-            "Open recent apps, tap the icon or ⋮ above the ChatGPT card, and tap Lock. A padlock appears and Clear all won't close it.",
+            "Open recent apps, tap the icon or ⋮ above the claude card, and tap Lock. A padlock appears and Clear all won't close it.",
             "",
             open = {},
         ))

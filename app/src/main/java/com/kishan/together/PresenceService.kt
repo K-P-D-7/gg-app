@@ -58,7 +58,7 @@ class PresenceService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(this, "running")
             .setSmallIcon(android.R.drawable.presence_online)
-            .setContentTitle("ChatGPT is sharing your status")
+            .setContentTitle("claude is sharing your status")
             .setContentIntent(open)
             .setOngoing(true)
             .build()
